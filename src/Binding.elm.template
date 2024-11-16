@@ -1,0 +1,15 @@
+port module {{ file_name }} exposing (..)
+
+import {{ module_path }}
+
+
+port out : {{ output_type }} -> Cmd msg
+
+
+main : Program {{ input_type }} () Never
+main =
+    Platform.worker
+        { init = \x -> ( (), {{ module_path }}.{{ function_name }} x |> out )
+        , subscriptions = always Sub.none
+        , update = \_ m -> ( m, Cmd.none )
+        }

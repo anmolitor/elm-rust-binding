@@ -1,0 +1,12 @@
+[package]
+name = "elm-rust-binding"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+regex = "1.11.1"
+rustyscript = "0.9.0"
+serde = { version = "1.0.215", features = ["derive"] }
+serde-reflection = "0.4.0"
+tree-sitter = "0.20.10"
+tree-sitter-elm = "5.7.0"
