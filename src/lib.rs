@@ -1,4 +1,5 @@
 mod elm_type;
+mod elm_type2;
 mod esm;
 
 use std::{fs, path::Path, process::Command};
@@ -18,19 +19,13 @@ fn call_elm_fn<I, O>(
     args: I,
 ) -> Result<O, Box<dyn std::error::Error>>
 where
-    I: Serialize,
-    O: Serialize + DeserializeOwned + Default,
+    I: Serialize + DeserializeOwned,
+    O: DeserializeOwned,
 {
     // 1. Generate a binding file via the template
-    let mut input_type = String::new();
-    args.serialize(ElmTypeSerializer {
-        output: &mut input_type,
-    })?;
+    let input_type = elm_type2::convert::<I>()?;
+    let output_type = elm_type2::convert::<O>()?;
 
-    let mut output_type = String::new();
-    O::default().serialize(ElmTypeSerializer {
-        output: &mut output_type,
-    })?;
     let binding_module_name = format!(
         "{}_{function_name}",
         module_path.split('.').collect::<Vec<_>>().join("_")
@@ -61,15 +56,38 @@ where
             String::from_utf8_lossy(&elm_compile_result.stderr)
         );
     }
+    let compiled_binding_file_path = elm_root.join("binding.js");
+    let compiled_binding = fs::read_to_string(&compiled_binding_file_path)?;
 
     // 3. Make the compiled JS esm compatible
-    Command::new("node").arg("to_es_module.mjs").output()?;
+    let to_esm = Module::new(
+        "to-esm.js",
+        r#"
+export default (js) => {
+  const elmExports = js.match(
+    /^\s*_Platform_export\(([^]*)\);\n?}\(this\)\);/m
+  )[1];
+  return js
+    .replace(/\(function\s*\(scope\)\s*\{$/m, "// -- $&")
+    .replace(/['"]use strict['"];$/m, "// -- $&")
+    .replace(/function _Platform_export([^]*?)\}\n/g, "/*\n$&\n*/")
+    .replace(/function _Platform_mergeExports([^]*?)\}\n\s*}/g, "/*\n$&\n*/")
+    .replace(/^\s*_Platform_export\(([^]*)\);\n?}\(this\)\);/m, "/*\n$&\n*/")
+    .concat(`
+export const Elm = ${elmExports};
+  `);
+};
+    "#,
+    );
+    let esm_compiled_binding: String =
+        Runtime::execute_module(&to_esm, vec![], Default::default(), &compiled_binding)?;
+
     // 4. Load the esm into rustyscript/deno
     let wrapper = Module::new(
         "run.js",
         &format!(
             "
-import {{ Elm }} from './binding2.js';
+import {{ Elm }} from './binding.js';
 
 export default (flags) => {{
   return new Promise((resolve) => {{
@@ -82,7 +100,7 @@ export default (flags) => {{
 "
         ),
     );
-    let binding_module = Module::load("./binding2.js").expect("Module parsing works");
+    let binding_module = Module::new("./binding.js", &esm_compiled_binding);
 
     // 5. Call the generated elm function and pass back the output to rust
     let output =
