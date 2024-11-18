@@ -1,6 +1,4 @@
-import fs from "node:fs";
-
-const toESModule = (js) => {
+export default (js) => {
   const elmExports = js.match(
     /^\s*_Platform_export\(([^]*)\);\n?}\(this\)\);/m
   )[1];
@@ -14,6 +12,3 @@ const toESModule = (js) => {
 export const Elm = ${elmExports};
   `);
 };
-
-let file = fs.readFileSync("./binding.js", "utf-8");
-fs.writeFileSync("./binding2.js", toESModule(file));

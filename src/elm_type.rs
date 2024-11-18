@@ -1,394 +1,196 @@
-use core::fmt;
-use std::fs;
+use std::{convert::identity, sync::LazyLock};
 
-use regex::Regex;
-use rustyscript::deno_core::serde::{
-    de::DeserializeOwned,
-    ser::{
-        SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
-        SerializeTupleStruct, SerializeTupleVariant,
-    },
-    Deserialize, Serialize, Serializer,
-};
+use crate::error::Result;
+use serde::Deserialize;
+use serde_reflection::{ContainerFormat, Format, Named, Registry, Samples};
 
-pub struct ElmTypeSerializer<'a> {
-    pub output: &'a mut String,
+static SAMPLES: LazyLock<Samples> = LazyLock::new(Samples::new);
+
+pub fn convert<'de, T: Deserialize<'de>>(
+    format_adjustment: impl Fn(String) -> String,
+) -> Result<String> {
+    let mut tracer = serde_reflection::Tracer::new(Default::default());
+    let (format, _) = tracer.trace_type_once::<T>(&SAMPLES)?;
+    let registry = tracer.registry()?;
+
+    Ok(convert_format(format, &registry, format_adjustment))
 }
 
-pub struct ElmTypeSerializerSeq<'a> {
-    output: &'a mut String,
-}
-
-pub struct ElmTypeSerializerStruct<'a> {
-    output: &'a mut String,
-    first_field: bool,
-}
-
-impl<'a> SerializeSeq for ElmTypeSerializerSeq<'a> {
-    type Ok = ();
-
-    type Error = fmt::Error;
-
-    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        value.serialize(ElmTypeSerializer {
-            output: &mut self.output,
-        })
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(())
-    }
-}
-
-impl<'a> SerializeStruct for ElmTypeSerializerStruct<'a> {
-    type Ok = ();
-
-    type Error = fmt::Error;
-
-    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        if self.first_field {
-            self.first_field = false;
-        } else {
-            *self.output += ", ";
+fn convert_format(
+    format: Format,
+    registry: &Registry,
+    format_adjustment: impl Fn(String) -> String,
+) -> String {
+    match format {
+        Format::Variable(_) => panic!("Unknown format"),
+        Format::TypeName(type_name) => {
+            let referenced_format = registry.get(&type_name).unwrap();
+            match referenced_format {
+                ContainerFormat::UnitStruct => "()".to_owned(),
+                ContainerFormat::NewTypeStruct(inner) => {
+                    convert_format(*inner.clone(), registry, format_adjustment)
+                }
+                ContainerFormat::TupleStruct(vec) => convert_tuple_format(vec.clone(), registry),
+                ContainerFormat::Struct(vec) => convert_struct_format(vec.clone(), registry),
+                ContainerFormat::Enum(_) => todo!("Enums are not supported"),
+            }
         }
-        *self.output += key;
-        *self.output += " : ";
-        value.serialize(ElmTypeSerializer {
-            output: self.output,
-        })
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        *self.output += " }";
-        Ok(())
-    }
-}
-
-impl<'a> SerializeTuple for ElmTypeSerializerStruct<'a> {
-    type Ok = ();
-
-    type Error = fmt::Error;
-
-    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        if self.first_field {
-            self.first_field = false;
-        } else {
-            *self.output += ", ";
+        Format::Unit => "()".to_owned(),
+        Format::Bool => "Bool".to_owned(),
+        Format::I8 => "Int".to_owned(),
+        Format::I16 => "Int".to_owned(),
+        Format::I32 => "Int".to_owned(),
+        Format::I64 => "Int".to_owned(),
+        Format::I128 => "Int".to_owned(),
+        Format::U8 => "Int".to_owned(),
+        Format::U16 => "Int".to_owned(),
+        Format::U32 => "Int".to_owned(),
+        Format::U64 => "Int".to_owned(),
+        Format::U128 => "Int".to_owned(),
+        Format::F32 => "Float".to_owned(),
+        Format::F64 => "Float".to_owned(),
+        Format::Char => "Char".to_owned(),
+        Format::Str => "String".to_owned(),
+        Format::Bytes => "Bytes".to_owned(),
+        Format::Option(inner) => format_adjustment(format!(
+            "Maybe {}",
+            convert_format(*inner, registry, wrap_in_round_brackets)
+        )),
+        Format::Seq(inner) => format_adjustment(format!(
+            "List {}",
+            convert_format(*inner, registry, wrap_in_round_brackets)
+        )),
+        Format::Map { key, value } => format_adjustment(format!(
+            "Dict {} {}",
+            convert_format(*key, registry, wrap_in_round_brackets),
+            convert_format(*value, registry, wrap_in_round_brackets)
+        )),
+        Format::Tuple(vec) => convert_tuple_format(vec, registry),
+        Format::TupleArray { content, size: _ } => {
+            format!(
+                "List {}",
+                convert_format(*content, registry, wrap_in_round_brackets)
+            )
         }
-        value.serialize(ElmTypeSerializer {
-            output: self.output,
-        })
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        *self.output += " )";
-        Ok(())
     }
 }
 
-impl<'a> SerializeMap for ElmTypeSerializerStruct<'a> {
-    type Ok = ();
+fn convert_tuple_format(vec: Vec<Format>, registry: &Registry) -> String {
+    let types = vec
+        .into_iter()
+        .map(|inner| convert_format(inner, registry, identity))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("( {types} )")
+}
 
-    type Error = fmt::Error;
+pub fn wrap_in_round_brackets(str: String) -> String {
+    format!("({str})")
+}
 
-    fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        if self.first_field {
-            *self.output += "Dict ";
-            key.serialize(ElmTypeSerializer {
-                output: self.output,
-            })?;
-            *self.output += " ";
+fn convert_struct_format(vec: Vec<Named<Format>>, registry: &Registry) -> String {
+    let types = vec
+        .into_iter()
+        .map(|inner| {
+            format!(
+                "{} : {}",
+                inner.name,
+                convert_format(inner.value, registry, identity)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {types} }}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, convert::identity};
+
+    use serde::Deserialize;
+
+    use crate::elm_type::wrap_in_round_brackets;
+
+    use super::convert;
+
+    #[test]
+    fn simple_struct() {
+        #[derive(Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Test {
+            a: i64,
+            b: bool,
         }
-        Ok(())
+        assert_eq!(convert::<Test>(identity).unwrap(), "{ a : Int, b : Bool }");
     }
 
-    fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        if self.first_field {
-            self.first_field = false;
-            value.serialize(ElmTypeSerializer {
-                output: self.output,
-            })?;
+    #[test]
+    fn simple_list() {
+        assert_eq!(convert::<Vec<i8>>(identity).unwrap(), "List Int");
+    }
+
+    #[test]
+    fn simple_tuple() {
+        assert_eq!(
+            convert::<(i16, String)>(identity).unwrap(),
+            "( Int, String )"
+        );
+    }
+
+    #[test]
+    fn simple_option() {
+        assert_eq!(convert::<Option<char>>(identity).unwrap(), "Maybe Char");
+    }
+
+    #[test]
+    fn format_adjustment_option() {
+        assert_eq!(
+            convert::<Option<char>>(wrap_in_round_brackets).unwrap(),
+            "(Maybe Char)"
+        );
+    }
+
+    #[test]
+    fn format_adjustment_vec() {
+        assert_eq!(
+            convert::<Vec<char>>(wrap_in_round_brackets).unwrap(),
+            "(List Char)"
+        );
+    }
+
+    #[test]
+    fn simple_map() {
+        assert_eq!(
+            convert::<HashMap<String, u16>>(identity).unwrap(),
+            "Dict String Int"
+        );
+    }
+
+    #[test]
+    fn nested_option() {
+        assert_eq!(
+            convert::<Option<Option<u8>>>(identity).unwrap(),
+            "Maybe (Maybe Int)"
+        );
+    }
+
+    #[test]
+    fn nested_struct() {
+        #[derive(Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Test {
+            a: i64,
+            b: bool,
         }
-        Ok(())
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(())
-    }
-}
-
-impl<'a> SerializeTupleStruct for ElmTypeSerializerStruct<'a> {
-    type Ok = ();
-
-    type Error = fmt::Error;
-
-    fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        if self.first_field {
-            self.first_field = false;
-        } else {
-            *self.output += ", ";
+        #[derive(Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Test2 {
+            c: Test,
+            d: Vec<Test>,
         }
-        value.serialize(ElmTypeSerializer {
-            output: self.output,
-        })
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        *self.output += " )";
-        Ok(())
-    }
-}
-
-impl<'a> SerializeTupleVariant for ElmTypeSerializer<'a> {
-    type Ok = ();
-
-    type Error = fmt::Error;
-
-    fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        todo!()
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
-    }
-}
-
-impl<'a> SerializeStructVariant for ElmTypeSerializer<'a> {
-    type Ok = ();
-
-    type Error = fmt::Error;
-
-    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        todo!()
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
-    }
-}
-
-impl<'a> Serializer for ElmTypeSerializer<'a> {
-    type Ok = ();
-    type Error = fmt::Error; // Use a simple error form for demonstration.
-
-    // Primitive types
-    type SerializeSeq = ElmTypeSerializerSeq<'a>;
-    type SerializeTuple = ElmTypeSerializerStruct<'a>;
-    type SerializeTupleStruct = ElmTypeSerializerStruct<'a>;
-    type SerializeTupleVariant = Self;
-    type SerializeMap = ElmTypeSerializerStruct<'a>;
-    type SerializeStruct = ElmTypeSerializerStruct<'a>;
-    type SerializeStructVariant = Self;
-
-    fn serialize_bool(self, _: bool) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Bool";
-        Ok(())
-    }
-
-    fn serialize_i8(self, _: i8) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_i16(self, _: i16) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_i32(self, _: i32) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_i64(self, _: i64) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_u8(self, _: u8) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_u16(self, _: u16) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_u32(self, _: u32) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_u64(self, _: u64) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Int";
-        Ok(())
-    }
-
-    fn serialize_f32(self, _: f32) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Float";
-        Ok(())
-    }
-
-    fn serialize_f64(self, _: f64) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Float";
-        Ok(())
-    }
-
-    fn serialize_str(self, _: &str) -> Result<Self::Ok, Self::Error> {
-        *self.output += "String";
-        Ok(())
-    }
-
-    fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        *self.output += "Maybe Never";
-        Ok(())
-    }
-
-    fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        *self.output += "Maybe ";
-        value.serialize(self)?;
-        Ok(())
-    }
-
-    fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        *self.output += "()";
-        Ok(())
-    }
-
-    fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        *self.output += "List ";
-        Ok(ElmTypeSerializerSeq {
-            output: self.output,
-        })
-    }
-
-    fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        Ok(ElmTypeSerializerStruct {
-            output: self.output,
-            first_field: true,
-        })
-    }
-
-    fn serialize_tuple_struct(
-        self,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        Ok(ElmTypeSerializerStruct {
-            output: self.output,
-            first_field: true,
-        })
-    }
-
-    fn serialize_tuple_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        Ok(self)
-    }
-
-    fn serialize_map(self, _: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        Ok(ElmTypeSerializerStruct {
-            output: self.output,
-            first_field: true,
-        })
-    }
-
-    fn serialize_struct(
-        self,
-        _: &'static str,
-        _len: usize,
-    ) -> Result<Self::SerializeStruct, Self::Error> {
-        *self.output += "{ ";
-        Ok(ElmTypeSerializerStruct {
-            output: self.output,
-            first_field: true,
-        })
-    }
-
-    fn serialize_struct_variant(
-        self,
-        _: &'static str,
-        _: u32,
-        _: &'static str,
-        _: usize,
-    ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        Ok(self)
-    }
-
-    fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
-        todo!()
-    }
-
-    fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        todo!()
-    }
-
-    fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
-        todo!()
-    }
-
-    fn serialize_unit_variant(
-        self,
-        name: &'static str,
-        variant_index: u32,
-        variant: &'static str,
-    ) -> Result<Self::Ok, Self::Error> {
-        todo!()
-    }
-
-    fn serialize_newtype_struct<T>(
-        self,
-        name: &'static str,
-        value: &T,
-    ) -> Result<Self::Ok, Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        todo!()
-    }
-
-    fn serialize_newtype_variant<T>(
-        self,
-        name: &'static str,
-        variant_index: u32,
-        variant: &'static str,
-        value: &T,
-    ) -> Result<Self::Ok, Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        todo!()
+        assert_eq!(
+            convert::<Option<Test2>>(identity).unwrap(),
+            "Maybe { c : { a : Int, b : Bool }, d : List { a : Int, b : Bool } }"
+        );
     }
 }

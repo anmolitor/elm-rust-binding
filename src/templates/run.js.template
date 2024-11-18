@@ -1,0 +1,11 @@
+import { Elm } from "./binding.js";
+
+export default (flags) => {
+  {{ debug_extras }}
+  return new Promise((resolve) => {
+    const elm = Elm.{{ binding_module_name }}.init({ flags });
+    elm.ports.out.subscribe((output) => {
+      resolve(output);
+    });
+  });
+};
