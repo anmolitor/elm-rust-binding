@@ -8,7 +8,7 @@ homepage = "https://github.com/anmolitor/elm-rust-binding"
 repository = "https://github.com/anmolitor/elm-rust-binding"
 readme = "README.md"
 keywords = ["elm", "binding"]
-categories = ["External FFI bindings", "Web programming", "Development tools"]
+categories = ["external-ffi-bindings", "web-programming", "development-tools"]
 
 [dependencies]
 rustyscript = { version = "0.9.0", features = ["console"] }
