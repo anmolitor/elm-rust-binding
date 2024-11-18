@@ -10,6 +10,10 @@ use rustyscript::{
 };
 use uuid::Uuid;
 
+/// The main entrypoint for this crate.
+///
+/// Represents a directory with Elm files inside of it
+/// and includes a Deno runtime to execute them when requested.
 pub struct ElmRoot {
     runtime: Runtime,
     root_path: PathBuf,
@@ -25,6 +29,12 @@ macro_rules! log {
 }
 
 impl ElmRoot {
+    /// Create an `ElmRoot` for a given directory.
+    /// The directory should NOT be the one with the elm.json file in it,
+    /// but the directory with the .elm files in it (with the default elm.json file, this is usually ./src).
+    ///
+    /// The reason for this is: You may choose any source-directories in your elm.json you like,
+    /// so we would need to parse elm.json and check all directories for the specified module.
     pub fn new<P>(path: P) -> Result<Self>
     where
         PathBuf: From<P>,
@@ -37,6 +47,11 @@ impl ElmRoot {
         })
     }
 
+    /// Set the `ElmRoot` to debug mode.
+    ///
+    /// This has two effects:
+    /// - Some println! logs to describe what the crate is doing
+    /// - The temporarily created files are not deleted
     pub fn debug(self) -> Self {
         Self {
             debug: true,
@@ -44,6 +59,16 @@ impl ElmRoot {
         }
     }
 
+    /// Prepare an Elm function for execution.
+    ///
+    /// The given function name should be in the same form as you would call it in your Elm project when
+    /// not using import aliases or unqualified imports.
+    ///
+    /// E.g. if your function `myFun` is defined in the module `MyModule.Submodule`, you would pass in `MyModule.Submodule.myFun`.
+    ///
+    /// The input and output types intended to be passed in subsequent calls have to be known at this point,
+    /// either by type inference or by explitely specifying them. The reason for this is that we generate a wrapper
+    /// application module for the requested function which needs type annotations (at least the type annotation for the port cannot be inferred).
     pub fn prepare<I, O>(
         &mut self,
         fully_qualified_function: &str,
@@ -137,10 +162,15 @@ impl ElmRoot {
                 .map_err(Error::map_disk_error(esm_binding_path))?;
         }
         // 4. Load the esm into rustyscript/deno
-        let debug_extras = if self.debug { "console.log('Calling elm binding with', flags);" } else { "" };
+        let debug_extras = if self.debug {
+            "console.log('Calling elm binding with', flags);"
+        } else {
+            ""
+        };
         let wrapper = Module::new(
             "run.js",
-            &RUN_JS_TEMPLATE.replace("{{ binding_module_name }}", &binding_module_name)
+            &RUN_JS_TEMPLATE
+                .replace("{{ binding_module_name }}", &binding_module_name)
                 .replace("{{ debug_extras }}", debug_extras),
         );
         let binding_module = Module::new("./binding.js", &esm_compiled_binding);
@@ -154,6 +184,8 @@ impl ElmRoot {
     }
 }
 
+/// A handle to an Elm function. The only thing you can do with this is `call` it.
+/// The main reason this is here, is to only do the `prepare` step once.
 pub struct ElmFunctionHandle<'a, I, O> {
     runtime: &'a mut Runtime,
     module: ModuleHandle,
@@ -165,6 +197,7 @@ where
     I: Serialize,
     O: DeserializeOwned,
 {
+    /// Calls the elm function with the given input and return the output.
     pub fn call(&mut self, input: I) -> Result<O> {
         let output = self.runtime.call_entrypoint(&self.module, &[input])?;
         Ok(output)

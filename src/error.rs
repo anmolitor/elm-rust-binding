@@ -1,20 +1,26 @@
 use std::{fmt::Display, path::PathBuf};
 
+/// Main error type for this crate.
 #[derive(Debug)]
 pub enum Error {
+    /// JavaScript parsing or execution error.
     RuntimeError(rustyscript::Error),
+    // Could not infer elm types based on given rust input/output types.
     TypeAnalysisError(serde_reflection::Error),
+    // Failed to read/write/delete files.
     DiskIOError {
         path: PathBuf,
         source: std::io::Error,
     },
+    // The qualified function name had the wrong format, or the Elm code did not compile.
     InvalidElmCall(String),
 }
 
+/// A simple Result alias with the crate specific `Error` type.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
-    pub fn map_disk_error(path: PathBuf) -> impl FnOnce(std::io::Error) -> Error {
+    pub(crate) fn map_disk_error(path: PathBuf) -> impl FnOnce(std::io::Error) -> Error {
         |source| Error::DiskIOError { path, source }
     }
 }
