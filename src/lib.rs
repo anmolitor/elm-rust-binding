@@ -174,3 +174,6 @@ where
 const BINDING_TEMPLATE: &str = include_str!("./templates/Binding.elm.template");
 const RUN_JS_TEMPLATE: &str = include_str!("./templates/run.js.template");
 const TO_ESM_JS: &str = include_str!("./templates/to-esm.mjs");
+
+#[doc = include_str!("../README.md")]
+struct _ReadMe;
