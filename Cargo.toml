@@ -2,6 +2,10 @@
 name = "elm-rust-binding"
 version = "0.1.0"
 edition = "2021"
+description = "Call Elm functions from Rust in an ergonomic way"
+license = "BSD-3 Clause"
+homepage = "https://github.com/anmolitor/elm-rust-binding"
+repository = "https://github.com/anmolitor/elm-rust-binding"
 
 [dependencies]
 rustyscript = { version = "0.9.0", features = ["console"] }
