@@ -8,7 +8,7 @@ use std::{
 pub use error::{Error, Result};
 use rustyscript::{
     deno_core::serde::{de::DeserializeOwned, Serialize},
-    Module, ModuleHandle, Runtime,
+     Module, ModuleHandle, Runtime,
 };
 use uuid::Uuid;
 
@@ -19,8 +19,7 @@ thread_local! {
 
 /// The main entrypoint for this crate.
 ///
-/// Represents a directory with Elm files inside of it
-/// and includes a Deno runtime to execute them when requested.
+/// Represents a directory with Elm files inside of it.
 pub struct ElmRoot {
     root_path: PathBuf,
     debug: bool,
@@ -153,8 +152,11 @@ impl ElmRoot {
 
         // 3. Make the compiled JS esm compatible
         let to_esm = Module::new("to-esm.js", TO_ESM_JS);
-        let esm_compiled_binding: String =
-            Runtime::execute_module(&to_esm, vec![], Default::default(), &compiled_binding)?;
+        let esm_compiled_binding: String = RUNTIME.with_borrow_mut(|runtime| {
+            let handle = runtime.load_module(&to_esm)?;
+            let result: String = runtime.call_entrypoint(&handle, &[compiled_binding])?;
+            Ok::<_, Error>(result)
+        })?;
         if self.debug {
             let esm_binding_path = self
                 .root_path
