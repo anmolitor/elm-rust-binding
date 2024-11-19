@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 macro_rules! add5_test {
     ($int_type:ty) => {{
-        let mut elm_root = ElmRoot::new("./tests/elm/src")?;
-        let mut elm_add5 = elm_root.prepare("Test.add5")?;
+        let elm_root = ElmRoot::new("./tests/elm/src")?;
+        let elm_add5 = elm_root.prepare("Test.add5")?;
         let result: $int_type = elm_add5.call(1)?;
         assert_eq!(result, 6);
         Ok(())
@@ -53,8 +53,8 @@ fn u64() -> Result<()> {
 
 #[test]
 fn string() -> Result<()> {
-    let mut elm_root = ElmRoot::new("./tests/elm/src")?;
-    let mut elm_prepend_test = elm_root.prepare("Test.prependTest")?;
+    let elm_root = ElmRoot::new("./tests/elm/src")?;
+    let elm_prepend_test = elm_root.prepare("Test.prependTest")?;
     let result: String = elm_prepend_test.call("abc".to_owned())?;
     assert_eq!(result, "testabc");
     Ok(())
@@ -73,9 +73,9 @@ fn structs() -> Result<()> {
         d: Option<bool>,
     }
 
-    let mut elm_root = ElmRoot::new("./tests/elm/src")?;
-    let mut elm_prepend_test = elm_root.prepare("Test.someStructMapper")?;
-    let result: Vec<StructOut> = elm_prepend_test.call(vec![StructIn {
+    let elm_root = ElmRoot::new("./tests/elm/src")?;
+    let elm_some_struct_mapper = elm_root.prepare("Test.someStructMapper")?;
+    let result: Vec<StructOut> = elm_some_struct_mapper.call(vec![StructIn {
         a: Some(5),
         b: vec![true, false],
     }])?;

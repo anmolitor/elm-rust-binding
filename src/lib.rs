@@ -1,7 +1,9 @@
 mod elm_type;
 mod error;
 
-use std::{convert::identity, fs, marker::PhantomData, path::PathBuf, process::Command};
+use std::{
+    cell::RefCell, convert::identity, fs, marker::PhantomData, path::PathBuf, process::Command,
+};
 
 pub use error::{Error, Result};
 use rustyscript::{
@@ -10,12 +12,16 @@ use rustyscript::{
 };
 use uuid::Uuid;
 
+thread_local! {
+    static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime::new(Default::default())
+        .expect("V8 Javascript Runtime initialization failed"));
+}
+
 /// The main entrypoint for this crate.
 ///
 /// Represents a directory with Elm files inside of it
 /// and includes a Deno runtime to execute them when requested.
 pub struct ElmRoot {
-    runtime: Runtime,
     root_path: PathBuf,
     debug: bool,
 }
@@ -39,9 +45,7 @@ impl ElmRoot {
     where
         PathBuf: From<P>,
     {
-        let runtime = Runtime::new(Default::default())?;
         Ok(Self {
-            runtime,
             root_path: PathBuf::from(path),
             debug: false,
         })
@@ -69,10 +73,7 @@ impl ElmRoot {
     /// The input and output types intended to be passed in subsequent calls have to be known at this point,
     /// either by type inference or by explitely specifying them. The reason for this is that we generate a wrapper
     /// application module for the requested function which needs type annotations (at least the type annotation for the port cannot be inferred).
-    pub fn prepare<I, O>(
-        &mut self,
-        fully_qualified_function: &str,
-    ) -> Result<ElmFunctionHandle<I, O>>
+    pub fn prepare<I, O>(&self, fully_qualified_function: &str) -> Result<ElmFunctionHandle<I, O>>
     where
         I: DeserializeOwned,
         O: DeserializeOwned,
@@ -174,10 +175,10 @@ impl ElmRoot {
                 .replace("{{ debug_extras }}", debug_extras),
         );
         let binding_module = Module::new("./binding.js", &esm_compiled_binding);
-        let module_handle = self.runtime.load_modules(&wrapper, vec![&binding_module])?;
+        let module_handle = RUNTIME
+            .with_borrow_mut(|runtime| runtime.load_modules(&wrapper, vec![&binding_module]))?;
 
         Ok(ElmFunctionHandle {
-            runtime: &mut self.runtime,
             module: module_handle,
             _type: Default::default(),
         })
@@ -186,20 +187,20 @@ impl ElmRoot {
 
 /// A handle to an Elm function. The only thing you can do with this is `call` it.
 /// The main reason this is here, is to only do the `prepare` step once.
-pub struct ElmFunctionHandle<'a, I, O> {
-    runtime: &'a mut Runtime,
+pub struct ElmFunctionHandle<I, O> {
     module: ModuleHandle,
     _type: PhantomData<(I, O)>,
 }
 
-impl<'a, I, O> ElmFunctionHandle<'a, I, O>
+impl<I, O> ElmFunctionHandle<I, O>
 where
     I: Serialize,
     O: DeserializeOwned,
 {
     /// Calls the elm function with the given input and return the output.
-    pub fn call(&mut self, input: I) -> Result<O> {
-        let output = self.runtime.call_entrypoint(&self.module, &[input])?;
+    pub fn call(&self, input: I) -> Result<O> {
+        let output =
+            RUNTIME.with_borrow_mut(|runtime| runtime.call_entrypoint(&self.module, &[input]))?;
         Ok(output)
     }
 }
