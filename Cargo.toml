@@ -1,6 +1,6 @@
 [package]
 name = "elm-rust-binding"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Call Elm functions from Rust in an ergonomic way"
 license = "BSD-3-Clause"
@@ -11,7 +11,7 @@ keywords = ["elm", "binding"]
 categories = ["external-ffi-bindings", "web-programming", "development-tools"]
 
 [dependencies]
-rustyscript = { version = "0.9.0", features = ["console"] }
-serde = { version = "1.0.215", features = ["derive"] }
-serde-reflection = "0.4.0"
-uuid = { version = "1.11.0", features = ["v7"] }
+rustyscript = { version = "^0.11.0", features = ["console"] }
+serde = { version = "^1.0.218", features = ["derive"] }
+serde-reflection = "^0.5.0"
+uuid = { version = "^1.15.0", features = ["v7"] }
