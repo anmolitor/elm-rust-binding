@@ -1,21 +1,23 @@
+#[cfg(all(feature = "v8", feature = "quickjs"))]
+compile_error!("Cannot enable both 'v8' and 'quickjs' features");
+
 mod elm_type;
 mod error;
+#[cfg(feature = "quickjs")]
+mod quickjs;
+#[cfg(feature = "quickjs")]
+pub use quickjs::ElmFunctionHandle;
 
-use std::{
-    cell::RefCell, convert::identity, fs, marker::PhantomData, path::PathBuf, process::Command,
-};
+#[cfg(feature = "v8")]
+mod v8;
+#[cfg(feature = "v8")]
+pub use v8::ElmFunctionHandle;
+
+use std::{convert::identity, fs, path::PathBuf, process::Command};
 
 pub use error::{Error, Result};
-use rustyscript::{
-    deno_core::serde::{de::DeserializeOwned, Serialize},
-     Module, ModuleHandle, Runtime,
-};
+use serde::de::DeserializeOwned;
 use uuid::Uuid;
-
-thread_local! {
-    static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime::new(Default::default())
-        .expect("V8 Javascript Runtime initialization failed"));
-}
 
 /// The main entrypoint for this crate.
 ///
@@ -72,7 +74,30 @@ impl ElmRoot {
     /// The input and output types intended to be passed in subsequent calls have to be known at this point,
     /// either by type inference or by explitely specifying them. The reason for this is that we generate a wrapper
     /// application module for the requested function which needs type annotations (at least the type annotation for the port cannot be inferred).
+    #[cfg(feature = "v8")]
     pub fn prepare<I, O>(&self, fully_qualified_function: &str) -> Result<ElmFunctionHandle<I, O>>
+    where
+        I: DeserializeOwned,
+        O: DeserializeOwned,
+    {
+        let elm_binding = self.prepare_shared::<I, O>(fully_qualified_function)?;
+        v8::prepare(self, elm_binding)
+    }
+
+    #[cfg(feature = "quickjs")]
+    pub async fn prepare<I, O>(
+        &self,
+        fully_qualified_function: &str,
+    ) -> Result<ElmFunctionHandle<I, O>>
+    where
+        I: DeserializeOwned,
+        O: DeserializeOwned,
+    {
+        let elm_binding = self.prepare_shared::<I, O>(fully_qualified_function)?;
+        quickjs::prepare(self, elm_binding).await
+    }
+
+    fn prepare_shared<I, O>(&self, fully_qualified_function: &str) -> Result<ElmBinding>
     where
         I: DeserializeOwned,
         O: DeserializeOwned,
@@ -89,7 +114,9 @@ impl ElmRoot {
 
         let qualified_segments = fully_qualified_function.split('.').collect::<Vec<_>>();
         let Some((function_name, module_path_segments)) = qualified_segments.split_last() else {
-            return Err(Error::InvalidElmCall(fully_qualified_function.to_owned()));
+            return Err(Box::new(Error::InvalidElmCall(
+                fully_qualified_function.to_owned(),
+            )));
         };
         log!(self, "Inferred function name: {function_name}");
 
@@ -128,16 +155,16 @@ impl ElmRoot {
         match elm_compile_result {
             Ok(ok) => {
                 if !ok.stderr.is_empty() {
-                    return Err(Error::InvalidElmCall(format!(
+                    return Err(Box::new(Error::InvalidElmCall(format!(
                         "The elm binding failed to compile: {}",
                         String::from_utf8_lossy(&ok.stderr)
-                    )));
+                    ))));
                 }
             }
             Err(error) => {
-                return Err(Error::InvalidElmCall(format!(
+                return Err(Box::new(Error::InvalidElmCall(format!(
                     "Failed to invoke elm compiler: {error}"
-                )))
+                ))))
             }
         }
 
@@ -149,66 +176,34 @@ impl ElmRoot {
         }
         let compiled_binding = compiled_binding_result
             .map_err(Error::map_disk_error(compiled_binding_file_path.clone()))?;
+        Ok(ElmBinding {
+            compiled_binding,
+            binding_module_name,
+        })
+    }
 
-        // 3. Make the compiled JS esm compatible
-        let to_esm = Module::new("to-esm.js", TO_ESM_JS);
-        let esm_compiled_binding: String = RUNTIME.with_borrow_mut(|runtime| {
-            let handle = runtime.load_module(&to_esm)?;
-            let result: String = runtime.call_entrypoint(&handle, &[compiled_binding])?;
-            Ok::<_, Error>(result)
-        })?;
+    fn write_esm_binding(
+        &self,
+        binding_module_name: &str,
+        esm_compiled_binding: &str,
+    ) -> Result<()> {
         if self.debug {
             let esm_binding_path = self
                 .root_path
                 .join(format!("{binding_module_name}-esm.mjs"));
-            fs::write(&esm_binding_path, esm_compiled_binding.clone())
+            fs::write(&esm_binding_path, esm_compiled_binding)
                 .map_err(Error::map_disk_error(esm_binding_path))?;
         }
-        // 4. Load the esm into rustyscript/deno
-        let debug_extras = if self.debug {
-            "console.log('Calling elm binding with', flags);"
-        } else {
-            ""
-        };
-        let wrapper = Module::new(
-            "run.js",
-            &RUN_JS_TEMPLATE
-                .replace("{{ binding_module_name }}", &binding_module_name)
-                .replace("{{ debug_extras }}", debug_extras),
-        );
-        let binding_module = Module::new("./binding.js", &esm_compiled_binding);
-        let module_handle = RUNTIME
-            .with_borrow_mut(|runtime| runtime.load_modules(&wrapper, vec![&binding_module]))?;
-
-        Ok(ElmFunctionHandle {
-            module: module_handle,
-            _type: Default::default(),
-        })
+        Ok(())
     }
 }
 
-/// A handle to an Elm function. The only thing you can do with this is `call` it.
-/// The main reason this is here, is to only do the `prepare` step once.
-pub struct ElmFunctionHandle<I, O> {
-    module: ModuleHandle,
-    _type: PhantomData<(I, O)>,
-}
-
-impl<I, O> ElmFunctionHandle<I, O>
-where
-    I: Serialize,
-    O: DeserializeOwned,
-{
-    /// Calls the elm function with the given input and return the output.
-    pub fn call(&self, input: I) -> Result<O> {
-        let output =
-            RUNTIME.with_borrow_mut(|runtime| runtime.call_entrypoint(&self.module, &[input]))?;
-        Ok(output)
-    }
+struct ElmBinding {
+    compiled_binding: String,
+    binding_module_name: String,
 }
 
 const BINDING_TEMPLATE: &str = include_str!("./templates/Binding.elm.template");
-const RUN_JS_TEMPLATE: &str = include_str!("./templates/run.js.template");
 const TO_ESM_JS: &str = include_str!("./templates/to-esm.mjs");
 
 #[doc = include_str!("../README.md")]

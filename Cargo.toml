@@ -10,8 +10,18 @@ readme = "README.md"
 keywords = ["elm", "binding"]
 categories = ["external-ffi-bindings", "web-programming", "development-tools"]
 
+[features]
+default = ["v8"]
+v8 = ["rustyscript"]
+quickjs = ["quickjs_runtime"]
+
 [dependencies]
-rustyscript = { version = "^0.11.0", features = ["console"] }
-serde = { version = "^1.0.218", features = ["derive"] }
+quickjs_runtime = { version = "0.14.9", optional = true }
+rustyscript = { version = "^0.11.0", features = ["console"], optional = true }
+serde = { version = "^1.0.219", features = ["derive"] }
 serde-reflection = "^0.5.0"
-uuid = { version = "^1.15.0", features = ["v7"] }
+serde_json = "1.0.140"
+uuid = { version = "^1.16.0", features = ["v7"] }
+
+[dev-dependencies]
+tokio = { version = "1.44.2", features = ["macros"] }

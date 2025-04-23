@@ -1,0 +1,9 @@
+async function call_{{ binding_module_name }}(flags) {
+    const { Elm } = await import('{{ binding_module_name }}.js');
+    return new Promise((resolve) => {
+        const elm = Elm.{{ binding_module_name }}.init({ flags });
+        elm.ports.out.subscribe((output) => {
+            resolve(output);
+        });
+    });
+}
