@@ -1,5 +1,7 @@
 #[cfg(all(feature = "v8", feature = "quickjs"))]
 compile_error!("Cannot enable both 'v8' and 'quickjs' features");
+#[cfg(not(any(feature = "v8", feature = "quickjs")))]
+compile_error!("Please enable one of the features: 'v8', 'quickjs'");
 
 mod elm_type;
 mod error;

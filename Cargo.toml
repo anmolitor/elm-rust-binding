@@ -1,6 +1,6 @@
 [package]
 name = "elm-rust-binding"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Call Elm functions from Rust in an ergonomic way"
 license = "BSD-3-Clause"
